@@ -1,399 +1,447 @@
-# --- 1. Import delle Librerie Necessarie ---
-import json
-import os
-import pandas as pd
+import json 
+import os 
 import numpy as np
-import lightgbm as lgb
-from sklearn.model_selection import train_test_split
-from tqdm import tqdm
+import pandas as pd
+import warnings 
+from tqdm import tqdm  
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold, cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from pprint import pprint
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import roc_curve, auc
+warnings.filterwarnings("ignore")
 
-# --- 2. Definizione delle Costanti e dei Percorsi ---
-DATA_PATH = r"C:\Users\franc\Desktop\data science\PRIMO ANNO\python\pokemon-fds"
-TRAIN_FILE_PATH = os.path.join(DATA_PATH, 'train.jsonl')
-TEST_FILE_PATH = os.path.join(DATA_PATH, 'test.jsonl')
-SUBMISSION_FILE_PATH = os.path.join(DATA_PATH, 'submission.csv')
+COMPETITION_NAME = 'fds-pokemon-battles-prediction-2025'
+DATA_PATH = os.path.dirname(os.path.abspath(__file__))
+train_file_path = os.path.join(DATA_PATH, 'train.jsonl')
+test_file_path = os.path.join(DATA_PATH, 'test.jsonl')
+train_data = [] 
 
-# Mappa delle efficacie dei tipi di Pokémon
-TYPE_CHART = {
-    'normal': {'rock': 0.5, 'ghost': 0, 'steel': 0.5},
-    'fire': {'fire': 0.5, 'water': 0.5, 'grass': 2, 'ice': 2, 'bug': 2, 'rock': 0.5, 'dragon': 0.5, 'steel': 2}, 
-    'water': {'fire': 2, 'water': 0.5, 'grass': 0.5, 'ground': 2, 'rock': 2, 'dragon': 0.5}, 
-    'electric': {'water': 2, 'electric': 0.5, 'grass': 0.5, 'ground': 0, 'flying': 2, 'dragon': 0.5}, 
-    'grass': {'fire': 0.5, 'water': 2, 'grass': 0.5, 'poison': 0.5, 'ground': 2, 'flying': 0.5, 'bug': 0.5, 'rock': 2, 'dragon': 0.5, 'steel': 0.5}, 
-    'ice': {'fire': 0.5, 'water': 0.5, 'grass': 2, 'ice': 0.5, 'ground': 2, 'flying': 2, 'dragon': 2, 'steel': 0.5}, 
-    'fighting': {'normal': 2, 'ice': 2, 'poison': 0.5, 'flying': 0.5, 'psychic': 0.5, 'bug': 0.5, 'rock': 2, 'ghost': 0, 'dark': 2, 'steel': 2, 'fairy': 0.5}, 
-    'poison': {'grass': 2, 'poison': 0.5, 'ground': 0.5, 'rock': 0.5, 'ghost': 0.5, 'steel': 0, 'fairy': 2}, 
-    'ground': {'fire': 2, 'electric': 2, 'grass': 0.5, 'poison': 2, 'flying': 0, 'bug': 0.5, 'rock': 2, 'steel': 2}, 
-    'flying': {'electric': 0.5, 'grass': 2, 'fighting': 2, 'bug': 2, 'rock': 0.5, 'steel': 0.5}, 
-    'psychic': {'fighting': 2, 'poison': 2, 'psychic': 0.5, 'dark': 0, 'steel': 0.5}, 
-    'bug': {'fire': 0.5, 'grass': 2, 'fighting': 0.5, 'poison': 0.5, 'flying': 0.5, 'psychic': 2, 'ghost': 0.5, 'dark': 2, 'steel': 0.5, 'fairy': 0.5}, 
-    'rock': {'fire': 2, 'ice': 2, 'fighting': 0.5, 'ground': 0.5, 'flying': 2, 'bug': 2, 'steel': 0.5}, 
-    'ghost': {'normal': 0, 'psychic': 2, 'ghost': 2, 'dark': 0.5}, 
-    'dragon': {'dragon': 2, 'steel': 0.5, 'fairy': 0}, 
-    'dark': {'fighting': 0.5, 'psychic': 2, 'ghost': 2, 'dark': 0.5, 'fairy': 0.5}, 
-    'steel': {'fire': 0.5, 'water': 0.5, 'electric': 0.5, 'ice': 2, 'rock': 2, 'steel': 0.5, 'fairy': 2}, 
-    'fairy': {'fire': 0.5, 'fighting': 2, 'poison': 0.5, 'dragon': 2, 'dark': 2, 'steel': 0.5}
-}
+print(f"Loading data from '{train_file_path}'...")
+try:
+    with open(train_file_path, 'r') as f:
+        for line in f:
+            train_data.append(json.loads(line))
+    print(f"Successfully loaded {len(train_data)} battles.")
+except FileNotFoundError:
+    print(f"ERROR: Could not find the training file at '{train_file_path}'.")
+    print("Please make sure you have added the competition data to this notebook.")
+from typing import List, Dict
 
-# --- 3. Funzioni per l'Ingegneria delle Feature ---
-
-def get_type_effectiveness(move_type: str, target_types: list[str]) -> float:
-    """Calcola il moltiplicatore di efficacia di un tipo di mossa contro i tipi del bersaglio."""
-    if not move_type or not target_types:
-        return 1.0
-    
-    move_type = move_type.lower()
-    target_types = [t.lower() for t in target_types if t and t.lower() != 'notype']
-    
-    if move_type not in TYPE_CHART or not target_types:
-        return 1.0
-
-    effectiveness = 1.0
-    for target_type in target_types:
-        effectiveness *= TYPE_CHART.get(move_type, {}).get(target_type, 1.0)
-    return effectiveness
-
+def clean_battles(data: List[Dict]) -> List[Dict]:
+    cleaned_data = []
+    fixed_count = 0
+    for battle in data:
+        p1_team = battle.get('p1_team_details', [])
+        if not isinstance(p1_team, list):
+            p1_team = []
+        for pkmn in p1_team:
+            if pkmn.get('level') != 100:
+                pkmn['level'] = 100
+                fixed_count += 1
+        battle['p1_team_details'] = p1_team
+        p2_lead = battle.get('p2_lead_details', {})
+        default_level = 100
+        if 'level' not in p2_lead or (isinstance(p2_lead.get('level'), (int, float)) and p2_lead['level'] <= 0):
+            p2_lead['level'] = default_level
+            fixed_count += 1
+        battle['p2_lead_details'] = p2_lead
+        cleaned_data.append(battle)
+    print(f"*** Cleaning complete: {len(data)} processed battles, {fixed_count} corrected battles ***")
+    return cleaned_data
 
 def create_battle_features(data: list[dict]) -> pd.DataFrame:
-    """Estrae feature avanzate dalle battaglie Pokemon."""
     feature_list = []
-    
-    for battle in tqdm(data, desc="Extracting battle features"):
+    for battle in tqdm(data, desc="Feature extraction"): 
         features = {}
-
-        # === PARTE 1: Analisi Team Completa ===
         p1_team = battle.get('p1_team_details', [])
-        p2_lead = battle.get('p2_lead_details')
-
-        if p1_team:
-            # Statistiche base del team
-            features['p1_mean_hp'] = np.mean([p.get('base_hp', 0) for p in p1_team])
-            features['p1_mean_atk'] = np.mean([p.get('base_atk', 0) for p in p1_team])
-            features['p1_mean_def'] = np.mean([p.get('base_def', 0) for p in p1_team])
-            features['p1_mean_spa'] = np.mean([p.get('base_spa', 0) for p in p1_team])
-            features['p1_mean_spd'] = np.mean([p.get('base_spd', 0) for p in p1_team])
-            features['p1_mean_spe'] = np.mean([p.get('base_spe', 0) for p in p1_team])
-            
-            # NUOVO: Statistiche minime e massime
-            features['p1_max_hp'] = np.max([p.get('base_hp', 0) for p in p1_team])
-            features['p1_min_hp'] = np.min([p.get('base_hp', 0) for p in p1_team])
-            features['p1_max_spe'] = np.max([p.get('base_spe', 0) for p in p1_team])
-            features['p1_min_spe'] = np.min([p.get('base_spe', 0) for p in p1_team])
-            
-            # NUOVO: Deviazione standard (variabilità del team)
-            features['p1_std_spe'] = np.std([p.get('base_spe', 0) for p in p1_team])
-            features['p1_std_hp'] = np.std([p.get('base_hp', 0) for p in p1_team])
-            
-            # NUOVO: Statistiche offensive/difensive combinate
-            features['p1_mean_offensive'] = np.mean([
-                max(p.get('base_atk', 0), p.get('base_spa', 0)) for p in p1_team
-            ])
-            features['p1_mean_defensive'] = np.mean([
-                (p.get('base_def', 0) + p.get('base_spd', 0)) / 2 for p in p1_team
-            ])
-            features['p1_max_offensive'] = np.max([
-                max(p.get('base_atk', 0), p.get('base_spa', 0)) for p in p1_team
-            ])
-            
-            # NUOVO: BST (Base Stat Total)
-            features['p1_mean_bst'] = np.mean([
-                sum([p.get('base_hp', 0), p.get('base_atk', 0), p.get('base_def', 0),
-                     p.get('base_spa', 0), p.get('base_spd', 0), p.get('base_spe', 0)])
-                for p in p1_team
-            ])
-            features['p1_max_bst'] = np.max([
-                sum([p.get('base_hp', 0), p.get('base_atk', 0), p.get('base_def', 0),
-                     p.get('base_spa', 0), p.get('base_spd', 0), p.get('base_spe', 0)])
-                for p in p1_team
-            ])
-
-        if p2_lead:
-            features['p2_lead_spe'] = p2_lead.get('base_spe', 0)
-            features['p2_lead_hp'] = p2_lead.get('base_hp', 0)
-            features['p2_lead_offensive'] = max(p2_lead.get('base_atk', 0), p2_lead.get('base_spa', 0))
-            features['p2_lead_defensive'] = (p2_lead.get('base_def', 0) + p2_lead.get('base_spd', 0)) / 2
-            features['p2_lead_bst'] = sum([
-                p2_lead.get('base_hp', 0), p2_lead.get('base_atk', 0), p2_lead.get('base_def', 0),
-                p2_lead.get('base_spa', 0), p2_lead.get('base_spd', 0), p2_lead.get('base_spe', 0)
-            ])
-        
-        # Matchup features
-        if p1_team and p2_lead:
-            features['speed_advantage'] = features.get('p1_max_spe', 0) - features.get('p2_lead_spe', 0)
-            features['offensive_advantage'] = features.get('p1_max_offensive', 0) - features.get('p2_lead_offensive', 0)
-            features['bst_advantage'] = features.get('p1_max_bst', 0) - features.get('p2_lead_bst', 0)
-            
-            # Efficacia di tipo
-            max_eff = max(
-                (get_type_effectiveness(p1_type, p2_lead.get('types', []))
-                 for p1_pkmn in p1_team for p1_type in p1_pkmn.get('types', [])),
-                default=1.0
-            )
-            features['p1_max_effectiveness_vs_lead'] = max_eff
-            
-            # NUOVO: Conta quanti Pokemon hanno vantaggio di tipo
-            features['p1_type_advantage_count'] = sum(
-                1 for p1_pkmn in p1_team
-                for p1_type in p1_pkmn.get('types', [])
-                if get_type_effectiveness(p1_type, p2_lead.get('types', [])) > 1.0
-            )
-
-        # === PARTE 2: Analisi Timeline Dettagliata ===
+        p2_lead = battle.get('p2_lead_details', {})
         timeline = battle.get('battle_timeline', [])
         
-        aggr_features = {
-            'battle_duration_turns': 0, 'p1_total_damage_dealt': 0.0, 'p2_total_damage_dealt': 0.0,
-            'p1_ko_count': 0, 'p2_ko_count': 0, 'p1_switch_count': 0, 'p2_switch_count': 0,
-            'p1_total_boosts': 0, 'p2_total_boosts': 0, 'p1_total_negative_boosts': 0, 'p2_total_negative_boosts': 0,
-            'p1_status_moves': 0, 'p2_status_moves': 0, 'p1_attacking_moves': 0, 'p2_attacking_moves': 0,
-            'p1_paralysis_count': 0, 'p2_paralysis_count': 0, 'p1_burn_count': 0, 'p2_burn_count': 0,
-            'p1_poison_count': 0, 'p2_poison_count': 0, 'p1_sleep_count': 0, 'p2_sleep_count': 0,
-            'p1_early_damage': 0.0, 'p2_early_damage': 0.0, 'p1_late_damage': 0.0, 'p2_late_damage': 0.0,
-            'p1_super_effective_count': 0, 'p2_super_effective_count': 0,
-            'p1_unique_pokemon_used': 0, 'p2_unique_pokemon_used': 0
-        }
-
-        if timeline:
-            aggr_features['battle_duration_turns'] = len(timeline)
-            last_known_hp = {}
-            fainted_by_p1, fainted_by_p2 = set(), set()
-            p1_pokemon_seen, p2_pokemon_seen = set(), set()
-            mid_turn = len(timeline) // 2
-
-            for idx, turn in enumerate(timeline):
-                p1_state = turn.get('p1_pokemon_state')
-                p2_state = turn.get('p2_pokemon_state')
-                p1_move = turn.get('p1_move_details')
-                p2_move = turn.get('p2_move_details')
-                
-                # Traccia Pokemon unici usati
-                if p1_state:
-                    p1_pokemon_seen.add(p1_state['name'])
-                if p2_state:
-                    p2_pokemon_seen.add(p2_state['name'])
-                
-                # Analisi danno P2 (inflitto da P1)
-                if p2_state:
-                    name, hp = p2_state['name'], p2_state.get('hp_pct', 1.0)
-                    dmg = last_known_hp.get(name, 1.0) - hp
-                    if dmg > 0:
-                        aggr_features['p1_total_damage_dealt'] += dmg
-                        if idx < mid_turn:
-                            aggr_features['p1_early_damage'] += dmg
-                        else:
-                            aggr_features['p1_late_damage'] += dmg
-                    last_known_hp[name] = hp
-                    
-                    if hp == 0 and name not in fainted_by_p1:
-                        aggr_features['p1_ko_count'] += 1
-                        fainted_by_p1.add(name)
-                    
-                    # Status analysis
-                    status = p2_state.get('status', 'nostatus')
-                    if status == 'par': aggr_features['p2_paralysis_count'] += 1
-                    elif status == 'brn': aggr_features['p2_burn_count'] += 1
-                    elif status in ['psn', 'tox']: aggr_features['p2_poison_count'] += 1
-                    elif status == 'slp': aggr_features['p2_sleep_count'] += 1
-                
-                # Analisi danno P1 (inflitto da P2)
-                if p1_state:
-                    name, hp = p1_state['name'], p1_state.get('hp_pct', 1.0)
-                    dmg = last_known_hp.get(name, 1.0) - hp
-                    if dmg > 0:
-                        aggr_features['p2_total_damage_dealt'] += dmg
-                        if idx < mid_turn:
-                            aggr_features['p2_early_damage'] += dmg
-                        else:
-                            aggr_features['p2_late_damage'] += dmg
-                    last_known_hp[name] = hp
-                    
-                    if hp == 0 and name not in fainted_by_p2:
-                        aggr_features['p2_ko_count'] += 1
-                        fainted_by_p2.add(name)
-                    
-                    status = p1_state.get('status', 'nostatus')
-                    if status == 'par': aggr_features['p1_paralysis_count'] += 1
-                    elif status == 'brn': aggr_features['p1_burn_count'] += 1
-                    elif status in ['psn', 'tox']: aggr_features['p1_poison_count'] += 1
-                    elif status == 'slp': aggr_features['p1_sleep_count'] += 1
-
-                # Switch count
-                if not p1_move: aggr_features['p1_switch_count'] += 1
-                if not p2_move: aggr_features['p2_switch_count'] += 1
-                
-                # Move analysis
-                if p1_move:
-                    if p1_move.get('category') == 'STATUS':
-                        aggr_features['p1_status_moves'] += 1
+        #aggr = dictionary holding total counts and measures like total turns, damage dealt/received
+        aggr = {'turns':0, 'p1_dmg':0, 'p2_dmg':0, 'p1_ko':0, 'p2_ko':0, 'p2_switch':0, 'p1_heal':0, 'p2_heal':0}
+        #last_hp = dict that stores the hp percentage of each pokemon at the end of the previous turn
+        last_hp = {}
+        #sets that storing the names of the Pokemon belonging to P1 or P2 that have already been KO
+        ko_p1, ko_p2 = set(), set()
+        #sets storing the neames of Pok from each team that appeared on the field at any point
+        p1_pokemon_seen, p2_pokemon_seen = set(), set()
+        #lists of the total damage delt by each player during each individual turn
+        p1_damage_by_turn, p2_damage_by_turn = [], []
+        #lists of the total HP percentage of the active pok for each player at the end of each individual turn
+        p1_hp_by_turn, p2_hp_by_turn = [], []     
+        #Count of moves that dealt damage greater than 25%
+        p1_effective_moves, p2_effective_moves = 0, 0
+        #Count of moves used by each player that are classified as PHISYCAL OR SPECIAL
+        p1_total_moves, p2_total_moves = 0, 0
+        #first_blood = tracks the player who first inflicted significant damage > 15%
+        first_blood = None 
+        #maximum cumultative HP advantage achieved by each player at any point in the battle
+        p1_max_lead, p2_max_lead = 0, 0        
+        #flag set to True if a player, who was behind in HP lead, eventually won the KO
+        comeback_detected = False
+        #ordered list storing which player scored a KO in chronological order
+        ko_sequence = []
+        #total number of times each player switched out their active pokemon
+        p1_switch_count, p2_switch_count = 0, 0
+        #total turns where a player's active pok was affected by a major status condition (burn, poison)
+        p1_status_turns, p2_status_turns = 0, 0
+        #turn number and player who achieved the very first KO of the match
+        first_ko_turn, first_ko_by = None, None
+        
+        for turn_idx, turn in enumerate(timeline):
+            turn_num = turn_idx + 1
+            #cumultative damage dealt by both players during this specific turn
+            p1_dmg_this_turn, p2_dmg_this_turn = 0, 0
+            #total HP percentage of the active Pokemon for both players
+            p1_hp_this_turn, p2_hp_this_turn = 0, 0 
+            for side in ['p1', 'p2']:
+                state = turn.get(f'{side}_pokemon_state', {})
+                move = turn.get(f'{side}_move_details')
+                opp = 'p2' if side == 'p1' else 'p1'
+                if state:
+                    poke_name = state.get('name', '')
+                    cur = state.get('hp_pct', 1.0)
+                    prev = last_hp.get(f'{side}_{poke_name}', 1.0)
+                    #calculate damage and healing based on the difference between the precious and current HP values
+                    dmg = max(prev - cur, 0)
+                    heal = max(cur - prev, 0)
+                    if side == 'p1':
+                        p1_pokemon_seen.add(poke_name)
+                        #Adds the current HP perentage(cur) to the temporary turn accumulator
+                        p1_hp_this_turn += cur
                     else:
-                        aggr_features['p1_attacking_moves'] += 1
-                        
-                    # Super effective check
-                    if p2_state and p1_move.get('type'):
-                        eff = get_type_effectiveness(
-                            p1_move['type'].lower(),
-                            [t for t in p2_state.get('types', []) if t]
-                        )
-                        if eff > 1.0:
-                            aggr_features['p1_super_effective_count'] += 1
-                
-                if p2_move:
-                    if p2_move.get('category') == 'STATUS':
-                        aggr_features['p2_status_moves'] += 1
+                        p2_pokemon_seen.add(poke_name)
+                        p2_hp_this_turn += cur
+                    if dmg > 0:
+                        #accomulate the total raw damage dealt by each player throughout the entire battle
+                        aggr[f'{opp}_dmg'] += dmg
+                        #if damage was inflicted by p1
+                        if opp == 'p1':
+                            p1_dmg_this_turn += dmg
+                            if first_blood is None and dmg > 0.15:#only a meaningful attack is counted, ignoring small damage
+                                first_blood = 'p1'
+                        else:
+                            p2_dmg_this_turn += dmg
+                            if first_blood is None and dmg > 0.15:
+                                first_blood = 'p2'
+                    if heal > 0:
+                        aggr[f'{side}_heal'] += heal
+                    #check if the player used offensive move
+                    if move and move.get('category') in ['PHYSICAL', 'SPECIAL']:
+                        if side == 'p1':
+                            p1_total_moves += 1
+                            #if the move caused significant damage it counts as an effective move
+                            if dmg > 0.25:
+                                p1_effective_moves += 1
+                        else:
+                            p2_total_moves += 1
+                            if dmg > 0.25:
+                                p2_effective_moves += 1
+                    #if the active Pok has a major status condition, the count of tourns spent undeer status for that player is incremented (fnt = svenimento/KO, quando HP pokemon scendono a 0)
+                    status = state.get('status', 'nostatus')
+                    if status not in ['nostatus', 'fnt']:
+                        if side == 'p1':
+                            p1_status_turns += 1
+                        else:
+                            p2_status_turns += 1
+                    #update the dictionary with the Pok's current HP
+                    last_hp[f'{side}_{poke_name}'] = cur
+                    #set the first ko turn and recors which player scored it
+                    if cur == 0:
+                        if first_ko_turn is None:
+                            first_ko_turn = turn_num
+                            first_ko_by = opp
+                        #check if the KO has already been counted; if it's a new one, it will be incremented, add pok's name to the KO set and append the opponent's id to the list ko_sequence
+                        if side == 'p1' and poke_name not in ko_p2:
+                            aggr['p2_ko'] += 1
+                            ko_p2.add(poke_name)
+                            ko_sequence.append('p2')
+                        elif side == 'p2' and poke_name not in ko_p1:
+                            aggr['p1_ko'] += 1
+                            ko_p1.add(poke_name)
+                            ko_sequence.append('p1')
+                #if the player did not use a move, there's a switch
+                if not move:
+                    if side == 'p1':
+                        p1_switch_count += 1
                     else:
-                        aggr_features['p2_attacking_moves'] += 1
-                        
-                    if p1_state and p2_move.get('type'):
-                        eff = get_type_effectiveness(
-                            p2_move['type'].lower(),
-                            [t for t in p1_state.get('types', []) if t]
-                        )
-                        if eff > 1.0:
-                            aggr_features['p2_super_effective_count'] += 1
-                
-                # Boost analysis
-                if p1_state and p1_state.get('boosts'):
-                    for v in p1_state['boosts'].values():
-                        if v > 0:
-                            aggr_features['p1_total_boosts'] += v
-                        elif v < 0:
-                            aggr_features['p1_total_negative_boosts'] += abs(v)
-                            
-                if p2_state and p2_state.get('boosts'):
-                    for v in p2_state['boosts'].values():
-                        if v > 0:
-                            aggr_features['p2_total_boosts'] += v
-                        elif v < 0:
-                            aggr_features['p2_total_negative_boosts'] += abs(v)
-            
-            aggr_features['p1_unique_pokemon_used'] = len(p1_pokemon_seen)
-            aggr_features['p2_unique_pokemon_used'] = len(p2_pokemon_seen)
-        
-        features.update(aggr_features)
-
-        # === PARTE 3: Feature Comparative e Ratios ===
-        features['ko_advantage'] = features['p1_ko_count'] - features['p2_ko_count']
-        features['net_damage_advantage'] = features['p1_total_damage_dealt'] - features['p2_total_damage_dealt']
-        features['net_boost_advantage'] = features['p1_total_boosts'] - features['p2_total_boosts']
-        features['switch_difference'] = features['p1_switch_count'] - features['p2_switch_count']
-        features['status_move_difference'] = features['p1_status_moves'] - features['p2_status_moves']
-        features['super_effective_difference'] = features['p1_super_effective_count'] - features['p2_super_effective_count']
-        
-        # Ratios (evita divisione per zero)
-        if features['p2_total_damage_dealt'] > 0:
-            features['damage_ratio'] = features['p1_total_damage_dealt'] / features['p2_total_damage_dealt']
+                        p2_switch_count += 1
+                        aggr['p2_switch'] += 1
+            #append the temporary pre-turn totals to their respective lists
+            p1_damage_by_turn.append(p1_dmg_this_turn)
+            p2_damage_by_turn.append(p2_dmg_this_turn)
+            p1_hp_by_turn.append(p1_hp_this_turn)
+            p2_hp_by_turn.append(p2_hp_this_turn)
+            hp_diff = p1_hp_this_turn - p2_hp_this_turn
+            #calculate the current HP difference and update the max lead achieved by either player up to that point
+            if hp_diff > p1_max_lead:
+                p1_max_lead = hp_diff
+            if -hp_diff > p2_max_lead:
+                p2_max_lead = -hp_diff
+            #increment the total turn
+            aggr['turns'] += 1
+        #comeback: is detected if one player achieved an HP lead(50% HP advantage) and if the opposite player won KO race
+        if p2_max_lead > 0.5 and aggr['p1_ko'] > aggr['p2_ko'] :
+            comeback_detected = True
+        elif p1_max_lead > 0.5 and aggr['p2_ko'] > aggr['p1_ko']:
+            comeback_detected = True
+        #*----------------------------------------------FEATURES---------------------------------------------------------
+        for k, v in aggr.items():
+            features[f'battle_{k}'] = v
+        features.pop('battle_turns', None)
+        if aggr['turns'] > 0:
+            #average amount of damage dealt by each players per battle turn
+            features['p1_dmg_per_turn'] = aggr['p1_dmg'] / aggr['turns']
+            features['p2_dmg_per_turn'] = aggr['p2_dmg'] / aggr['turns']
+            #relative damage advantage of P1 over P2. A value grater than 1 indicates that P1 dealt more total damage than P2
+            features['damage_relative_ratio'] = (aggr['p1_dmg'] + 0.01) / (aggr['p2_dmg'] + 0.01)
+        #total balance of damage inflicted by P1 compared to damage by P2 over the entire battle; positive value --> P1 inflicted more total dmg than P2 
+        features['net_balance_damage'] = aggr['p1_dmg'] - aggr['p2_dmg']
+        #total balance of knocked out Pok achieved by P1 compared to those of P2
+        features['net_balance_ko'] = aggr['p1_ko'] - aggr['p2_ko']
+        if len(p1_damage_by_turn) > 1:
+            #mean damage per turn divided by the StaDev of damae epr turn
+            p1_dmg_mean = sum(p1_damage_by_turn) / len(p1_damage_by_turn)
+            p1_dmg_variance = sum((x - p1_dmg_mean)**2 for x in p1_damage_by_turn) / len(p1_damage_by_turn)
+            features['p1_damage_staDev_consistency'] = p1_dmg_mean / (p1_dmg_variance**0.5 + 0.01)
         else:
-            features['damage_ratio'] = features['p1_total_damage_dealt']
-        
-        if features['battle_duration_turns'] > 0:
-            features['p1_ko_rate'] = features['p1_ko_count'] / features['battle_duration_turns']
-            features['p2_ko_rate'] = features['p2_ko_count'] / features['battle_duration_turns']
-            features['p1_damage_per_turn'] = features['p1_total_damage_dealt'] / features['battle_duration_turns']
-            features['p2_damage_per_turn'] = features['p2_total_damage_dealt'] / features['battle_duration_turns']
-        
-        # Momentum features
-        if features['p1_early_damage'] > 0:
-            features['p1_momentum'] = features['p1_late_damage'] / features['p1_early_damage']
+            features['p1_damage_staDev_consistency'] = 0
+        if len(p2_damage_by_turn) > 1:
+            p2_dmg_mean = sum(p2_damage_by_turn) / len(p2_damage_by_turn)
+            p2_dmg_variance = sum((x - p2_dmg_mean)**2 for x in p2_damage_by_turn) / len(p2_damage_by_turn)
+            features['p2_damage_staDev_consistency'] = p2_dmg_mean / (p2_dmg_variance**0.5 + 0.01)
         else:
-            features['p1_momentum'] = features['p1_late_damage']
-            
-        if features['p2_early_damage'] > 0:
-            features['p2_momentum'] = features['p2_late_damage'] / features['p2_early_damage']
+            features['p2_damage_staDev_consistency'] = 0
+        #gap of P2's consistency score from P1's.
+        features['consistency_diff'] = features['p1_damage_staDev_consistency'] - features['p2_damage_staDev_consistency']
+        #divide the count of effective moves (that dealt > 25%) by the total offensive moves used
+        p1_move_effectiveness = p1_effective_moves / (p1_total_moves + 1)
+        features['p2_move_effect'] = p2_effective_moves / (p2_total_moves + 1)
+        #capture the realtive advantage. A positive value indicates that P1 was on average more efficient with their offensive moves
+        features['effectiveness_diff'] = p1_move_effectiveness - features['p2_move_effect']
+        #binary feature indicating which player was the first to inflict significant damage > 15% 
+        features['first_blood_p1'] = 1 if first_blood == 'p1' else 0
+        #measure diversity of Pok used by P1 relative to the total size of their team
+        features['p1_team_diversity'] = len(p1_pokemon_seen) / (len(p1_team) + 1)
+        #measure the absolute number of P2's Pok that were actively brought
+        features['p2_team_absolute'] = len(p2_pokemon_seen)
+        #Binary fag indicating if the winner overcame a significant HP lead held by the opponent earlier in the match
+        features['comeback'] = 1 if comeback_detected else 0
+        #largest HP advantage achieved by either player at any single point in the battle
+        features['max_lead_achieved'] = max(p1_max_lead, p2_max_lead)
+        #KO streak analysis: analyze the KO sequence to calculate the current consecutive streak for the player who scored the KO. 
+        if len(ko_sequence) > 0:
+            max_streak_p1 = 0
+            max_streak_p2 = 0
+            current_streak = 1
+            for i in range(1, len(ko_sequence)):
+                if ko_sequence[i] == ko_sequence[i-1]:
+                    current_streak += 1
+                else:
+                    if ko_sequence[i-1] == 'p1':
+                        max_streak_p1 = max(max_streak_p1, current_streak)
+                    else:
+                        max_streak_p2 = max(max_streak_p2, current_streak)
+                    current_streak = 1
+            if ko_sequence[-1] == 'p1':
+                max_streak_p1 = max(max_streak_p1, current_streak)
+            else:
+                max_streak_p2 = max(max_streak_p2, current_streak)
+            #max n of consecutive KOs achieved by each player
+            features['max_consKo_streak_p1'] = max_streak_p1
+            features['max_consKo_streak_p2'] = max_streak_p2
+            features['ko_cons_diff'] = max_streak_p1 - max_streak_p2
         else:
-            features['p2_momentum'] = features['p2_late_damage']
-
-        # === PARTE 4: ID e Target ===
+            features['max_consKo_streak_p1'] = 0
+            features['max_consKo_streak_p2'] = 0
+            features['ko_cons_diff'] = 0
+        #number of the first ko or 999 if no KO occured
+        features['first_ko_per_turn'] = first_ko_turn if first_ko_turn else 999
+        #1 if the first KO was scored by P1
+        features['first_ko_scored_by_p1'] = 1 if first_ko_by == 'p1' else 0
+        features['early_first_general_ko'] = 1 if first_ko_turn and first_ko_turn <= 5 else 0
+        #gap in the total number of times players switched Pok
+        features['switch_diff_p1_p2'] = p1_switch_count - p2_switch_count
+        #PS's switch count normalized by the total n of turns
+        features['p2_switch_normalized'] = p2_switch_count / (aggr['turns'] + 1)
+        #percentage of turns P1/P2's active pok was afflicted by a major status condition
+        features['p1_afflicted_by_major_status'] = p1_status_turns / (aggr['turns'] + 1)
+        features['p2_afflicted_by_major_status'] = p2_status_turns / (aggr['turns'] + 1)
+        #gap that measures which player was more effective at avoiding status or inflicting it on the opponent
+        features['status_avoiding'] = features['p2_afflicted_by_major_status'] - features['p1_afflicted_by_major_status']
+        p1_lead = p1_team[0] if p1_team else {}
+        p1_lead_speed = p1_lead.get('base_spe', 0)
+        p2_lead_speed = p2_lead.get('base_spe', 0)
+        #absolute gap in speed between the two pok at the start of the battle
+        features['speed_diff'] = p1_lead_speed - p2_lead_speed
+        #true if p1 is faster
+        features['best_speed_advantage'] = 1 if p1_lead_speed > p2_lead_speed else 0
         features['battle_id'] = battle.get('battle_id')
         if 'player_won' in battle:
             features['player_won'] = int(battle['player_won'])
-            
         feature_list.append(features)
-        
     return pd.DataFrame(feature_list).fillna(0)
 
+print("\nCleaning training and test data...")
+test_data = []
+with open(test_file_path, 'r') as f:
+    for line in f:
+        test_data.append(json.loads(line))
+test_data = clean_battles(test_data)
 
-# --- 4. Esecuzione del Flusso di Lavoro ---
-
-print(f"Loading training data from '{TRAIN_FILE_PATH}'...")
-try:
-    with open(TRAIN_FILE_PATH, 'r') as f:
-        train_data_raw = [json.loads(line) for line in f]
-    print(f"Successfully loaded {len(train_data_raw)} training battles.")
-except FileNotFoundError:
-    print(f"ERROR: Training file not found at '{TRAIN_FILE_PATH}'.")
-    exit()
-
-train_df = create_battle_features(train_data_raw)
+train_data = clean_battles(train_data)
+train_df = create_battle_features(train_data)
+test_df = create_battle_features(test_data)
 
 features = [col for col in train_df.columns if col not in ['battle_id', 'player_won']]
 X = train_df[features]
 y = train_df['player_won']
-
-X_train, X_val, y_train, y_val = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-print(f"\nData split: {len(X_train)} training samples, {len(X_val)} validation samples.")
-print(f"Total features: {len(features)}")
-
-# MIGLIORAMENTO: Parametri ottimizzati per LightGBM
-print("\nTraining LightGBM model with optimized parameters...")
-model = lgb.LGBMClassifier(
-    random_state=42,
-    n_estimators=1000,
-    learning_rate=0.03,
-    num_leaves=50,
-    max_depth=8,
-    min_child_samples=20,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    reg_alpha=0.1,
-    reg_lambda=0.1,
-    importance_type='gain'
-)
-
-model.fit(
-    X_train, y_train,
-    eval_set=[(X_val, y_val)],
-    eval_metric='accuracy',
-    callbacks=[lgb.early_stopping(50, verbose=False)]
-)
-print("Model training complete.")
-
-val_accuracy = model.score(X_val, y_val)
-print(f"\n--- Model Performance ---")
-print(f"Accuracy on Validation Set: {val_accuracy:.4f} ({val_accuracy:.2%})")
-
-# Feature importance
-print("\n--- Top 15 Most Important Features ---")
-feature_importance = pd.DataFrame({
-    'feature': features,
-    'importance': model.feature_importances_
-}).sort_values('importance', ascending=False)
-print(feature_importance.head(15))
-
-# --- 5. Generazione Predizioni ---
-
-print(f"\nLoading and processing test data from '{TEST_FILE_PATH}'...")
-try:
-    with open(TEST_FILE_PATH, 'r') as f:
-        test_data_raw = [json.loads(line) for line in f]
-    test_df = create_battle_features(test_data_raw)
-except FileNotFoundError:
-    print(f"ERROR: Test file not found at '{TEST_FILE_PATH}'.")
-    exit()
-
-test_ids = test_df['battle_id']
 X_test = test_df[features]
 
-print("Generating predictions on the test set...")
-test_predictions = model.predict(X_test)
+features = [col for col in train_df.columns if col not in ['battle_id', 'player_won']]
+X = train_df[features]
+y = train_df['player_won']
+X_test = test_df[features]
+
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X, y, test_size=0.3, shuffle=True, random_state=39
+)
+print(f"Training set: {X_train.shape}, Validation set: {X_valid.shape}")
+
+def logreg_grid_search_extended(C_value, penalty_type, solver_type):
+    model = LogisticRegression(C=C_value, penalty=penalty_type, solver=solver_type, max_iter=1000)
+    predictions = model.fit(X_train, y_train).predict(X_valid)
+    return [C_value, penalty_type, solver_type, accuracy_score(y_valid, predictions)]
+
+results_list = []
+C_values = [0.01, 0.1, 1, 10]
+penalty_types = ["l1", "l2"]
+solver_types = ["liblinear", "lbfgs"]
+
+for C_value in C_values:
+    for penalty_type in penalty_types:
+        for solver_type in solver_types:
+            try:
+                results_list.append(logreg_grid_search_extended(C_value, penalty_type, solver_type))
+            except ValueError:
+                continue
+pprint(results_list)
+
+pipeline = make_pipeline(StandardScaler(),  LogisticRegression(max_iter=5000))
+param_grid = {
+    'logisticregression__C': [0.01, 0.1, 1, 10],
+    'logisticregression__penalty': ['l1', 'l2'],
+    'logisticregression__solver': ['liblinear', 'lbfgs']
+}
+
+grid_logreg = GridSearchCV(
+    estimator=pipeline,
+    param_grid=param_grid,
+    scoring='roc_auc',
+    n_jobs=-1,
+    cv=5,
+    refit=True,
+    return_train_score=True,
+)
+
+print("\n*** Starting GridSearchCV 5-fold ***")
+grid_logreg.fit(X_train, y_train)
+
+best_params = grid_logreg.best_params_
+best_score = grid_logreg.best_score_
+
+print("\n*** Best iperparameters found ***")
+print(best_params)
+print(f"*** Best ROC-AUC CV: {best_score:.4f} ***")
+
+best_model = grid_logreg.best_estimator_
+predictions = best_model.predict(X_valid)
+predictions_proba = best_model.predict_proba(X_valid)[:, 1]
+
+print("\n*** Performance on validation set ***")
+print("1. Accuracy:", round(accuracy_score(y_valid, predictions), 4))
+print("2. ROC-AUC:", round(roc_auc_score(y_valid, predictions_proba), 4))
+print("3. Confusion Matrix:\n", confusion_matrix(y_valid, predictions))
+
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+cv_scores = cross_val_score(best_model, X, y, cv=kf, scoring='accuracy')
+
+print("\n*** 5-Fold Cross-Validation (accuracy) ***")
+print("1. Fold scores:", np.round(cv_scores, 4))
+print("2. Mean:", np.round(cv_scores.mean(), 4), "±", np.round(cv_scores.std(), 4))
+
+best_model.fit(X, y)
+test_predictions = best_model.predict(X_test)
 
 submission_df = pd.DataFrame({
-    'battle_id': test_ids,
+    'battle_id': test_df['battle_id'],
     'player_won': test_predictions
 })
+submission_df.to_csv('submission.csv', index=False)
+print("\n*** File 'submission.csv' built ***")
 
-submission_df.to_csv(SUBMISSION_FILE_PATH, index=False)
-print(f"\nSubmission file '{os.path.basename(SUBMISSION_FILE_PATH)}' created successfully!")
-print("--- Submission Head ---")
-print(submission_df.head())
+def mostra_feature_importanti(model_pipeline, feature_names: list[str]):
+    logreg = model_pipeline.named_steps['logisticregression']
+    if not hasattr(logreg, 'coef_'):
+        print(f"Error: The model {type(logreg)} does not have the attribute 'coef_'.")
+        return
+    coefficients = logreg.coef_[0]
+    importance_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Coefficient': coefficients,
+        'Importanza_Abs': np.abs(coefficients)
+    }).sort_values(by='Importanza_Abs', ascending=False)
+    return importance_df
+
+print(f"\n*** Total feature: {len(features)} ***")
+print("*** Standing feature ordered by importance ***")
+print(mostra_feature_importanti(best_model, features))
+
+def plot_feature_importance():
+    plot_df = mostra_feature_importanti(best_model, features) 
+    plot_df['Abs_Coefficient'] = plot_df['Coefficient'].abs()
+    plot_df = plot_df.sort_values(by='Abs_Coefficient', ascending=True)
+    colors = ['#C44E52' if c < 0 else '#55A868' for c in plot_df['Coefficient']]
+    plt.style.use('fivethirtyeight')
+    plt.figure(figsize=(12, 10))
+    plt.barh(
+        plot_df['Feature'], 
+        plot_df['Coefficient'], 
+        color=colors,
+        edgecolor='none',
+        alpha=0.8
+    )
+    plt.title(
+        "Features' Importance", 
+        fontsize=18, 
+        fontweight='bold', 
+        color='black'
+    )
+    plt.axvline(0, color='gray', linestyle='-', linewidth=0.7)     
+    plt.xlabel('Coefficient', fontsize=14, color='dimgray')
+    plt.ylabel(None)
+    plt.tick_params(axis='both', which='major', labelsize=12)
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    plt.gca().yaxis.grid(False) 
+    plt.tight_layout()
+    plt.show()
+
+def plot_confusion_matrix(y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)    
+    plt.figure(figsize=(7, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Predict 0 (Loser)', 'Predict 1 (Winner)'],
+                yticklabels=['Real 0 (Loser)', 'Real 1 (Winner)'])
+    plt.title('Confusion Matrix - Validation Set')
+    plt.ylabel('Real class')
+    plt.xlabel('Predict class')
+    plt.show()
+
+plot_confusion_matrix(y_valid, predictions)
+importance_df = mostra_feature_importanti(best_model, features)
+plot_feature_importance()
