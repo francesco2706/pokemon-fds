@@ -385,7 +385,7 @@ submission_df = pd.DataFrame({
 submission_df.to_csv('submission.csv', index=False)
 print("\n*** File 'submission.csv' built ***")
 
-def mostra_feature_importanti(model_pipeline, feature_names: list[str]):
+def show_important_features(model_pipeline, feature_names: list[str]):
     logreg = model_pipeline.named_steps['logisticregression']
     if not hasattr(logreg, 'coef_'):
         print(f"Error: The model {type(logreg)} does not have the attribute 'coef_'.")
@@ -400,10 +400,10 @@ def mostra_feature_importanti(model_pipeline, feature_names: list[str]):
 
 print(f"\n*** Total feature: {len(features)} ***")
 print("*** Standing feature ordered by importance ***")
-print(mostra_feature_importanti(best_model, features))
+print(show_important_features(best_model, features))
 
 def plot_feature_importance():
-    plot_df = mostra_feature_importanti(best_model, features) 
+    plot_df = show_important_features(best_model, features) 
     plot_df['Abs_Coefficient'] = plot_df['Coefficient'].abs()
     plot_df = plot_df.sort_values(by='Abs_Coefficient', ascending=True)
     colors = ['#C44E52' if c < 0 else '#55A868' for c in plot_df['Coefficient']]
@@ -443,5 +443,11 @@ def plot_confusion_matrix(y_true, y_pred):
     plt.show()
 
 plot_confusion_matrix(y_valid, predictions)
-importance_df = mostra_feature_importanti(best_model, features)
+importance_df = show_important_features(best_model, features)
 plot_feature_importance()
+
+
+
+
+
+
