@@ -398,7 +398,7 @@ submission_df = pd.DataFrame({
 submission_df.to_csv('submission.csv', index=False)
 print("\n*** File 'submission.csv' built ***")
 
-def mostra_feature_importanti_xgb(model_pipeline, feature_names: list[str]):
+def show_important_features_xgb(model_pipeline, feature_names: list[str]):
     try:
         xgb_model = model_pipeline.named_steps['xgbclassifier']
     except KeyError:
@@ -413,10 +413,10 @@ def mostra_feature_importanti_xgb(model_pipeline, feature_names: list[str]):
     }).sort_values(by='Importanza_Abs', ascending=False).reset_index(drop=True)
     return importance_df
 
-print(mostra_feature_importanti_xgb(best_model, features))
+print(show_important_features_xgb(best_model, features))
 
 def plot_feature_importance():
-    plot_df = mostra_feature_importanti_xgb(best_model, features) 
+    plot_df = show_important_features_xgb(best_model, features) 
     plot_df['Abs_Coefficient'] = plot_df['Coefficient'].abs()
     plot_df = plot_df.sort_values(by='Abs_Coefficient', ascending=True)
     colors = ['#C44E52' if c < 0 else '#55A868' for c in plot_df['Coefficient']]
@@ -456,5 +456,5 @@ def plot_confusion_matrix(y_true, y_pred):
     plt.show()
 
 plot_confusion_matrix(y_valid, predictions)
-importance_df = mostra_feature_importanti_xgb(best_model, features)
+importance_df = show_important_features_xgb(best_model, features)
 plot_feature_importance()
