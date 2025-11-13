@@ -330,7 +330,7 @@ y = train_df['player_won']
 X_test = test_df[features]
 
 X_train, X_valid, y_train, y_valid = train_test_split(
-    X, y, test_size=0.3, shuffle=True, random_state=42
+    X, y, test_size=0.3, shuffle=True, random_state=39
 )
 print(f"Training set: {X_train.shape}, Validation set: {X_valid.shape}")
 
@@ -408,7 +408,7 @@ def show_important_features_xgb(model_pipeline, feature_names: list[str]):
     importance = xgb_model.feature_importances_
     importance_df = pd.DataFrame({
         'Feature': feature_names,
-        'Coefficient': importance,         # treat as “coefficients” (all positive)
+        'Coefficient': importance,     
         'Importanza_Abs': np.abs(importance)
     }).sort_values(by='Importanza_Abs', ascending=False).reset_index(drop=True)
     return importance_df
