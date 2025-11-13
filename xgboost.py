@@ -10,9 +10,6 @@ import numpy as np
 import pandas as pd
 from pprint import pprint
 import warnings
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import roc_curve, auc
 warnings.filterwarnings("ignore")
 
 COMPETITION_NAME = 'fds-pokemon-battles-prediction-2025'
@@ -53,7 +50,6 @@ def clean_battles(data: List[Dict]) -> List[Dict]:
         cleaned_data.append(battle)
     print(f"✅ Pulizia completata: {len(data)} battaglie processate, {fixed_count} correzioni effettuate.")
     return cleaned_data
-# --------------------------------------------------------
 def clean_battles(data: List[Dict]) -> List[Dict]:
     cleaned_data = []
     fixed_count = 0
@@ -386,7 +382,7 @@ cv_scores = cross_val_score(best_model, X, y, cv=kf, scoring='accuracy')
 
 print("\n*** 5-Fold Cross-Validation (accuracy) ***")
 print("1. Fold scores:", np.round(cv_scores, 4))
-print("2. Media:", np.round(cv_scores.mean(), 4), "±", np.round(cv_scores.std(), 4))
+print("2. Mean:", np.round(cv_scores.mean(), 4), "±", np.round(cv_scores.std(), 4))
 
 best_model.fit(X, y)
 test_predictions = best_model.predict(X_test)
@@ -396,65 +392,6 @@ submission_df = pd.DataFrame({
     'player_won': test_predictions
 })
 submission_df.to_csv('submission.csv', index=False)
-print("\n*** File 'submission.csv' built ***")
 
-def show_important_features_xgb(model_pipeline, feature_names: list[str]):
-    try:
-        xgb_model = model_pipeline.named_steps['xgbclassifier']
-    except KeyError:
-        print("Error: None step 'xgbclassifier' in pipeline.")
-        print(model_pipeline.named_steps.keys())
-        return None
-    importance = xgb_model.feature_importances_
-    importance_df = pd.DataFrame({
-        'Feature': feature_names,
-        'Coefficient': importance,     
-        'Importanza_Abs': np.abs(importance)
-    }).sort_values(by='Importanza_Abs', ascending=False).reset_index(drop=True)
-    return importance_df
 
-print(show_important_features_xgb(best_model, features))
 
-def plot_feature_importance():
-    plot_df = show_important_features_xgb(best_model, features) 
-    plot_df['Abs_Coefficient'] = plot_df['Coefficient'].abs()
-    plot_df = plot_df.sort_values(by='Abs_Coefficient', ascending=True)
-    colors = ['#C44E52' if c < 0 else '#55A868' for c in plot_df['Coefficient']]
-    plt.style.use('fivethirtyeight')
-    plt.figure(figsize=(12, 10))
-    plt.barh(
-        plot_df['Feature'], 
-        plot_df['Coefficient'], 
-        color=colors,
-        edgecolor='none',
-        alpha=0.8
-    )
-    plt.title(
-        "Features' Importance", 
-        fontsize=18, 
-        fontweight='bold', 
-        color='black'
-    )
-    plt.axvline(0, color='gray', linestyle='-', linewidth=0.7)     
-    plt.xlabel('Coefficient', fontsize=14, color='dimgray')
-    plt.ylabel(None)
-    plt.tick_params(axis='both', which='major', labelsize=12)
-    plt.grid(axis='x', linestyle='--', alpha=0.7)
-    plt.gca().yaxis.grid(False) 
-    plt.tight_layout()
-    plt.show()
-
-def plot_confusion_matrix(y_true, y_pred):
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(7, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=['Predict 0 (Loser)', 'Predict 1 (Winner)'],
-                yticklabels=['Real 0 (Loser)', 'Real 1 (Winner)'])
-    plt.title('Confusion Matrix')
-    plt.ylabel('Real Class')
-    plt.xlabel('Predict class')
-    plt.show()
-
-plot_confusion_matrix(y_valid, predictions)
-importance_df = show_important_features_xgb(best_model, features)
-plot_feature_importance()
