@@ -13,8 +13,7 @@ from sklearn.tree import DecisionTreeClassifier
 warnings.filterwarnings("ignore")
 
 COMPETITION_NAME = 'fds-pokemon-battles-prediction-2025'
-DATA_PATH = os.path.dirname(os.path.abspath(__file__))
-train_file_path = os.path.join(DATA_PATH, 'train.jsonl')
+DATA_PATH = os.path.join('../input', COMPETITION_NAME)train_file_path = os.path.join(DATA_PATH, 'train.jsonl')
 test_file_path = os.path.join(DATA_PATH, 'test.jsonl')
 train_data = [] 
 
@@ -344,4 +343,5 @@ submission_df = pd.DataFrame({
     'player_won': test_predictions
 })
 submission_df.to_csv('submission.csv', index=False)
+
 print("\n File 'submission.csv' creato con successo!")
